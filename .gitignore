@@ -1,0 +1,10 @@
+
+.venv/
+__pycache__/
+.streamlit/secrets.toml
+credentials.json
+token.pickle
+google-credentials.json
+*.json
+test_bigquery.py
+test_sheets.py
