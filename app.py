@@ -1,8 +1,37 @@
 
 import streamlit as st
 import pandas as pd
-from sheets_helper import get_sheet
 from datetime import datetime
+
+
+# =========================================================
+# CONFIGURATION
+# =========================================================
+
+st.set_page_config(
+    page_title="Vessel Fuel AI",
+    page_icon="🚢",
+    layout="wide",
+)
+
+
+# =========================================================
+# MODEL: LINEAR REGRESSION
+# Bobot diambil dari BigQuery ML model_bbm_v2.
+# Prediksi dihitung lokal agar aplikasi publik tidak
+# memerlukan kredensial BigQuery.
+# =========================================================
+
+CATEGORY_WEIGHTS = {
+    "Tugboat": 284.97867970439506,
+    "SPOB": 414.30282565425694,
+    "Crew Boat": 251.21849993806902,
+}
+
+INTERCEPT = -316.99367910222594
+WEIGHT_DISTANCE = 3.3033492123938575
+WEIGHT_DURATION = 28.226681305909175
+WEIGHT_CARGO = 0.40528329218125553
 
 
 def predict_fuel(
@@ -11,49 +40,58 @@ def predict_fuel(
     durasi_jam,
     muatan_ton,
 ):
-    category_weights = {
-        "Tugboat": 284.97867970439506,
-        "SPOB": 414.30282565425694,
-        "Crew Boat": 251.21849993806902,
-    }
+    """Menghitung estimasi konsumsi BBM dengan bobot model."""
 
-    if jenis_kapal not in category_weights:
+    if jenis_kapal not in CATEGORY_WEIGHTS:
         raise ValueError("Jenis kapal tidak dikenali.")
 
-    # Menyamakan input dengan SQL sebelumnya,
-    # yang mengubah ketiga fitur numerik menjadi INT64.
+    # Menyamakan tipe input dengan query BigQuery sebelumnya.
     jarak = int(jarak_tempuh_nm)
     durasi = int(durasi_jam)
     muatan = int(muatan_ton)
 
-    return (
-        -316.99367910222594
-        + category_weights[jenis_kapal]
-        + 3.3033492123938575 * jarak
-        + 28.226681305909175 * durasi
-        + 0.40528329218125553 * muatan
+    prediction = (
+        INTERCEPT
+        + CATEGORY_WEIGHTS[jenis_kapal]
+        + WEIGHT_DISTANCE * jarak
+        + WEIGHT_DURATION * durasi
+        + WEIGHT_CARGO * muatan
     )
 
+    return max(0.0, float(prediction))
 
-st.set_page_config(
-    page_title="Vessel Fuel AI",
-    page_icon="🚢",
-    layout="wide",
-)
 
-# Header
+# =========================================================
+# SESSION HISTORY
+# Riwayat terpisah untuk setiap sesi pengunjung.
+# =========================================================
+
+if "prediction_history" not in st.session_state:
+    st.session_state.prediction_history = []
+
+
+# =========================================================
+# HEADER
+# =========================================================
+
 st.title("🚢 Vessel Fuel AI")
 st.caption(
     "Smart Maritime Fuel Prediction | "
-    "Prototype berbasis Google Cloud BigQuery ML"
+    "Prototype berbasis model Linear Regression"
 )
 
 st.divider()
 
-# Sidebar input
+
+# =========================================================
+# SIDEBAR INPUT
+# =========================================================
+
 with st.sidebar:
     st.header("⚙️ Parameter Kapal")
-    st.write("Masukkan data perjalanan untuk membuat prediksi.")
+    st.write(
+        "Masukkan data perjalanan untuk membuat prediksi."
+    )
 
     jenis_kapal = st.selectbox(
         "Jenis kapal",
@@ -87,15 +125,23 @@ with st.sidebar:
         type="primary",
     )
 
-# Area utama
+
+# =========================================================
+# PREDICTION
+# =========================================================
+
 st.subheader("Ringkasan Prediksi")
 st.write(
     "Masukkan parameter di panel kiri, lalu jalankan prediksi."
 )
 
 if predict_button:
+
     if jarak_tempuh_nm <= 0 or durasi_jam <= 0:
-        st.error("Jarak dan durasi harus lebih dari nol.")
+        st.error(
+            "Jarak dan durasi perjalanan harus lebih dari nol."
+        )
+
     else:
         try:
             with st.spinner("Model AI sedang menghitung..."):
@@ -106,23 +152,43 @@ if predict_button:
                     muatan_ton,
                 )
 
-            # Kartu metrik
+            # Simpan riwayat ke sesi pengguna.
+            history_record = {
+                "Waktu Prediksi": datetime.now().strftime(
+                    "%Y-%m-%d %H:%M:%S"
+                ),
+                "Jenis Kapal": jenis_kapal,
+                "Jarak (NM)": int(jarak_tempuh_nm),
+                "Durasi (Jam)": int(durasi_jam),
+                "Muatan (Ton)": int(muatan_ton),
+                "Prediksi BBM (Liter)": round(
+                    prediction, 2
+                ),
+            }
+
+            st.session_state.prediction_history.append(
+                history_record
+            )
+
+            # Kartu metrik.
             col1, col2, col3 = st.columns(3)
 
             col1.metric(
                 "Estimasi konsumsi BBM",
                 f"{prediction:,.2f} liter",
             )
+
             col2.metric(
                 "Jarak tempuh",
                 f"{jarak_tempuh_nm:g} NM",
             )
+
             col3.metric(
                 "Durasi perjalanan",
                 f"{durasi_jam:g} jam",
             )
 
-            st.success("Prediksi berhasil dihitung.")
+            st.success("Prediksi berhasil dihitung!")
 
             st.divider()
             st.subheader("Detail Perjalanan")
@@ -165,29 +231,10 @@ if predict_button:
 
             st.bar_chart(chart_data)
 
-            # Simpan riwayat ke Google Sheets
-            try:
-                sheet = get_sheet()
-                sheet.append_row([
-                    datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-                    jenis_kapal,
-                    int(jarak_tempuh_nm),
-                    int(durasi_jam),
-                    int(muatan_ton),
-                    float(prediction),
-                ])
-                st.success(
-                    "Riwayat prediksi berhasil disimpan ke Google Sheets."
-                )
-            except Exception as save_error:
-                st.warning(
-                    "Prediksi berhasil, tetapi riwayat belum tersimpan."
-                )
-                st.caption(str(save_error))
-
             st.info(
-                "Ini adalah prototipe dengan data simulasi. "
-                "Hasilnya belum tervalidasi untuk operasi kapal nyata."
+                "Prototipe ini menggunakan bobot model hasil "
+                "pelatihan sebelumnya. Hasil prediksi belum "
+                "divalidasi untuk operasi kapal nyata."
             )
 
         except Exception as e:
@@ -200,29 +247,40 @@ else:
         "kemudian klik Prediksi Konsumsi BBM."
     )
 
-# Riwayat prediksi dari Google Sheets
+
+# =========================================================
+# PREDICTION HISTORY
+# =========================================================
+
 st.divider()
 st.subheader("🕘 Riwayat Prediksi")
 
-try:
-    sheet = get_sheet()
-    records = sheet.get_all_records()
-    history_df = pd.DataFrame(records)
+history = st.session_state.prediction_history
 
-    if history_df.empty:
-        st.info("Belum ada riwayat prediksi.")
-    else:
-        st.dataframe(
-            history_df.tail(20).iloc[::-1],
-            hide_index=True,
-            use_container_width=True,
-        )
+if history:
+    history_df = pd.DataFrame(history)
 
-except Exception as e:
-    st.warning("Riwayat prediksi belum dapat dimuat.")
-    st.caption(str(e))
+    st.dataframe(
+        history_df.iloc[::-1].head(20),
+        hide_index=True,
+        use_container_width=True,
+    )
+
+    if st.button("🗑️ Hapus Riwayat Sesi"):
+        st.session_state.prediction_history = []
+        st.rerun()
+
+else:
+    st.info(
+        "Belum ada riwayat prediksi pada sesi ini."
+    )
+
+
+# =========================================================
+# FOOTER
+# =========================================================
 
 st.divider()
 st.caption(
-    "Vessel Fuel AI • Prototype pembelajaran Machine Learning di GCP"
+    "Vessel Fuel AI • Portfolio Machine Learning"
 )
