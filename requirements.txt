@@ -5,3 +5,4 @@ db-dtypes
 gspread
 google-auth-oauthlib
 google-auth
+requests
